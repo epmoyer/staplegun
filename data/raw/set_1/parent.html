@@ -1,0 +1,20 @@
+{{ staplegun parent }}
+<body>
+    This file will be processed and saved
+
+    The Foo div will get inserted here
+    {{ staplegun insert_block foo }}
+    
+    The child div will get inserted here
+    {{ staplegun import_file child.html }}
+    
+    The (empty) bar block will get inserted here:
+    {{ staplegun insert_block bar }}
+</body>
+
+{{ staplegun define_block foo }}
+<div>foo</div>
+{{ staplegun end }}
+
+{{ staplegun define_block bar }}
+{{ staplegun end }}
