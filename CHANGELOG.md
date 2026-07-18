@@ -9,5 +9,10 @@ to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 ## Unreleased
 (None)
 
+## 1.0.0 2024-06-30
+### Added
+- var injection using `{{ staplegun var <varname> }}`
+- version reporting via `VersionInfo()`
+
 ## 0.1.0 2024-03-01
 - Initial Release

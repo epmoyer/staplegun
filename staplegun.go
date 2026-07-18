@@ -12,6 +12,9 @@ import (
 	"strings"
 )
 
+const gTitle = "staplegun"
+const gVersion = "1.0.0"
+
 var gVerbose = false
 var gDirSource = ""
 
@@ -22,6 +25,8 @@ var regexEnd *regexp.Regexp
 var regexInsertBlock *regexp.Regexp
 var regexImportFile *regexp.Regexp
 
+type blocksT map[string][]string
+
 func init() {
 	regexIsParent, _ = regexp.Compile(`^\s*{{\s*staplegun\s*parent\s*}}\s*$`)
 	regexIsChild, _ = regexp.Compile(`^\s*{{\s*staplegun\s*child\s*}}\s*$`)
@@ -31,7 +36,13 @@ func init() {
 	regexImportFile, _ = regexp.Compile(`^(\s*){{\s*staplegun\s*import_file\s*(\S+)\s*}}\s*$`)
 }
 
-func MakeTemplates(dirSource string, dirDest string, verbose bool) error {
+type VarMap map[string]string
+
+func VersionInfo() string {
+	return gTitle + " v" + gVersion
+}
+
+func MakeTemplates(dirSource string, dirDest string, verbose bool, varMap VarMap) error {
 	gVerbose = verbose
 	gDirSource = dirSource
 
@@ -66,7 +77,8 @@ func MakeTemplates(dirSource string, dirDest string, verbose bool) error {
 		// Pase the template
 		filenameBase := filepath.Base(sourceFile)
 		indentLevel := 1
-		isParent, isChild, linesOut, err := parseTemplate(sourceFile, indentLevel)
+		blocksEmpty := blocksT{}
+		isParent, isChild, linesOut, _, err := parseTemplate(sourceFile, blocksEmpty, indentLevel, varMap)
 		if err != nil {
 			return err
 		}
@@ -95,75 +107,128 @@ func MakeTemplates(dirSource string, dirDest string, verbose bool) error {
 	return nil
 }
 
-func parseTemplate(inFilePath string, indentLevel int) (isParent bool, isChild bool, linesOut []string, err error) {
+func parseTemplate(
+	inFilePath string,
+	blocksIn blocksT,
+	indentLevel int,
+	varMap VarMap) (
+	isParent bool,
+	isChild bool,
+	linesOut []string,
+	blocksOut blocksT,
+	err error) {
 	vPrintLn(indentLevel, fmt.Sprintf("Parsing %q", inFilePath))
+
+	blocksOut = copyBlocks(blocksIn)
 
 	// ------------------------
 	// Read input file
 	// ------------------------
 	b, err := os.ReadFile(inFilePath)
 	if err != nil {
-		return false, false, []string{}, err
+		return false, false, []string{}, blocksT{}, err
 	}
 	text := string(b)
 	lines := strings.Split(text, "\n")
 
 	if len(lines) < 2 {
 		// empty file
-		return false, false, []string{}, nil
+		return false, false, []string{}, blocksT{}, nil
 	}
 
 	isParent = regexIsParent.MatchString(lines[0])
 	isChild = regexIsChild.MatchString(lines[0])
 	if !isParent && !isChild {
 		// Not a staplegun file, so ignore
-		return false, false, []string{}, nil
+		return false, false, []string{}, blocksT{}, nil
 	}
 
 	// Drop the first line (parent/child directive)
 	lines = lines[1:]
 
 	// ------------------------
+	// PRE Parse insert_block directives
+	// ------------------------
+	vPrintLn(indentLevel+1, "Post-parsing insert_block directives...")
+
+	// We ignore undefined blocks in the the pre-parsing pass.
+	// The job of this pass is to resolve the content of any known blocks before extracting,
+	// since there may be resolvable insert_block statements in the content of newly defined blocks,
+	// and we want to resolve any "nested" block content before extracting the (new) blocks.
+	ignoreUndefinedBlocks := true
+	lines, err = parseInsertBlockDirectives(lines, blocksOut, ignoreUndefinedBlocks, indentLevel)
+	if err != nil {
+		return false, false, []string{}, blocksT{}, err
+	}
+
+	// ------------------------
 	// Extract Blocks
 	// ------------------------
-	blocks, lines, err := extractBlocks(lines, indentLevel)
+	var blocksExtracted blocksT
+	blocksExtracted, lines, err = extractBlocks(lines, indentLevel)
 	if err != nil {
-		return false, false, []string{}, err
+		return false, false, []string{}, blocksT{}, err
 	}
-	vPrintLn(indentLevel+1, fmt.Sprintf("Extracted %d blocks.", len(blocks)))
+	vPrintLn(indentLevel+1, fmt.Sprintf("Extracted %d blocks.", len(blocksExtracted)))
+	blocksOut = mergeBlocks(blocksOut, blocksExtracted)
 	// vPrintLn(fmt.Sprintf("        Blocks: %#v", blocks))
 
 	// ------------------------
 	// Parse import_file directives
 	// ------------------------
-	lines, err = parseImportFileDirectives(lines, blocks, indentLevel)
+	var blocksNew blocksT
+	lines, blocksNew, err = parseImportFileDirectives(lines, blocksOut, indentLevel, varMap)
 	if err != nil {
-		return false, false, []string{}, err
+		return false, false, []string{}, blocksOut, err
+	}
+	if len(blocksNew) > len(blocksOut) {
+		vPrintLn(
+			indentLevel+1,
+			fmt.Sprintf("Received %d new blocks from all imports combined.", len(blocksNew)-len(blocksOut)))
+		blocksOut = copyBlocks(blocksNew)
 	}
 
 	// ------------------------
-	// Parse insert_block directives
+	// POST Parse insert_block directives
 	// ------------------------
+	vPrintLn(indentLevel+1, "Post-parsing insert_block directives...")
 
 	// Blocks are generally not defined yet when a child document is parsed, so
 	// if an insert_block statement in a child document references an undefined block
 	// then we ignore the warning and retain the inset_block statement, which will
 	// then be resolved at a higher level in the import_file hierarchy (or eventually
 	// cause an error to reported in the parent document).
-	ignoreUndefinedBlocks := isChild
-	lines, err = parseInsertBlockDirectives(lines, blocks, ignoreUndefinedBlocks, indentLevel)
+	ignoreUndefinedBlocks = isChild
+	lines, err = parseInsertBlockDirectives(lines, blocksOut, ignoreUndefinedBlocks, indentLevel)
 	if err != nil {
-		return false, false, []string{}, err
+		return false, false, []string{}, blocksT{}, err
 	}
+
+	// ------------------------
+	// Substitute variables
+	// ------------------------
+	lines = substituteVariables(lines, indentLevel, varMap)
 
 	// ------------------------
 	// Return parsed document
 	// ------------------------
-	return isParent, isChild, lines, nil
+	return isParent, isChild, lines, blocksOut, nil
+}
+
+func substituteVariables(linesIn []string, indentLevel int, varMap VarMap) (linesOut []string) {
+	for _, line := range linesIn {
+		for varName, varValue := range varMap {
+			// Create a regex pattern with zero or more whitespaces in appropriate places and one or more whitespace before/after var
+			pattern := regexp.MustCompile(`{{\s*staplegun\s+var\s+` + regexp.QuoteMeta(varName) + `\s*}}`)
+			line = pattern.ReplaceAllString(line, varValue)
+		}
+		linesOut = append(linesOut, line)
+	}
+	return linesOut
 }
 
 func parseInsertBlockDirectives(linesIn []string,
-	blocks map[string][]string,
+	blocks blocksT,
 	ignoreUndefinedBlocks bool,
 	indentLevel int) (linesOut []string, err error) {
 	for _, line := range linesIn {
@@ -196,6 +261,7 @@ func parseInsertBlockDirectives(linesIn []string,
 				linesOut = append(linesOut, indentWhitespace+blockLine)
 			}
 			linesOut = append(linesOut, indentWhitespace+"<!-- sg:block:end:"+blockName+" -->")
+			vPrintLn(indentLevel+1, fmt.Sprintf("RESOLVED insert_block: %q", blockName))
 			continue
 		}
 
@@ -206,8 +272,15 @@ func parseInsertBlockDirectives(linesIn []string,
 }
 
 func parseImportFileDirectives(linesIn []string,
-	blocks map[string][]string,
-	indentLevel int) (linesOut []string, err error) {
+	blocksIn blocksT,
+	indentLevel int,
+	varMap VarMap) (
+	linesOut []string,
+	blocksOut blocksT,
+	err error) {
+
+	blocksOut = copyBlocks(blocksIn)
+
 	for _, line := range linesIn {
 
 		// -------------------
@@ -217,10 +290,18 @@ func parseImportFileDirectives(linesIn []string,
 		if len(match) == 3 {
 			indentWhitespace := match[1]
 			filename := match[2]
-			_, _, importedLines, err := parseTemplate(gDirSource+"/"+filename, indentLevel+1)
+
+			importFilePath := gDirSource + "/" + filename
+			vPrintLn(indentLevel+1, fmt.Sprintf("Importing %q", importFilePath))
+
+			var importedLines []string
+			var blocksExtracted blocksT
+
+			_, _, importedLines, blocksExtracted, err = parseTemplate(importFilePath, blocksOut, indentLevel+2, varMap)
 			if err != nil {
-				return []string{}, err
+				return []string{}, blocksT{}, err
 			}
+			blocksOut = mergeBlocks(blocksOut, blocksExtracted)
 			// Insert the imported lines, prepending each line with the same indentation as
 			// the insert_block statement
 			linesOut = append(linesOut, indentWhitespace+"<!-- sg:file:start:"+filename+" -->")
@@ -234,11 +315,33 @@ func parseImportFileDirectives(linesIn []string,
 		// Content line
 		linesOut = append(linesOut, line)
 	}
-	return linesOut, nil
+	return linesOut, blocksOut, nil
 }
 
-func extractBlocks(linesIn []string, indentLevel int) (blocks map[string][]string, linesOut []string, err error) {
-	blocks = make(map[string][]string)
+func copyBlocks(blocksIn blocksT) (blocksOut blocksT) {
+	blocksOut = make(blocksT)
+	for blockName, blockLines := range blocksIn {
+		blocksOut[blockName] = blockLines
+	}
+	return blocksOut
+}
+
+func mergeBlocks(blocks1 blocksT, blocks2 blocksT) (blocksOut blocksT) {
+	blocksOut = copyBlocks(blocks1)
+	for blockName, blockLines := range blocks2 {
+		blocksOut[blockName] = copyLines(blockLines)
+	}
+	return blocksOut
+}
+
+func copyLines(linesIn []string) (linesOut []string) {
+	linesOut = make([]string, len(linesIn))
+	copy(linesOut, linesIn)
+	return linesOut
+}
+
+func extractBlocks(linesIn []string, indentLevel int) (blocksOut blocksT, linesOut []string, err error) {
+	blocksOut = make(blocksT)
 	currentBlockName := ""
 	currentBlockLines := []string{}
 	for _, line := range linesIn {
@@ -248,7 +351,7 @@ func extractBlocks(linesIn []string, indentLevel int) (blocks map[string][]strin
 		// vPrintLn(fmt.Sprintf("match: %#v", match))
 		if len(match) == 2 {
 			if currentBlockName != "" {
-				return make(map[string][]string),
+				return make(blocksT),
 					[]string{},
 					fmt.Errorf(
 						"found start of block when a previous block %q was not closed",
@@ -262,9 +365,9 @@ func extractBlocks(linesIn []string, indentLevel int) (blocks map[string][]strin
 		// End of define block
 		if regexEnd.MatchString(line) {
 			if currentBlockName == "" {
-				return make(map[string][]string), []string{}, fmt.Errorf("found end of block when no block was started")
+				return make(blocksT), []string{}, fmt.Errorf("found end of block when no block was started")
 			}
-			blocks[currentBlockName] = currentBlockLines
+			blocksOut[currentBlockName] = currentBlockLines
 			currentBlockName = ""
 			currentBlockLines = []string{}
 			continue
@@ -282,14 +385,14 @@ func extractBlocks(linesIn []string, indentLevel int) (blocks map[string][]strin
 
 	// Unclosed block?
 	if currentBlockName != "" {
-		return make(map[string][]string),
+		return make(blocksT),
 			[]string{},
 			fmt.Errorf(
 				"block %q was not closed",
 				currentBlockName)
 	}
 
-	return blocks, linesOut, nil
+	return blocksOut, linesOut, nil
 }
 
 // Verbose print
