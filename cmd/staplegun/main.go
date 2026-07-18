@@ -29,7 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"staplegun"
+	"github.com/epmoyer/staplegun"
 )
 
 // varFlag collects repeated -var name=value flags into a staplegun.VarMap.

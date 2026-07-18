@@ -44,11 +44,15 @@ Variable substitution (`var`) is a fourth, simpler feature layered on top.
 
 ## Installation
 
-staplegun is a Go library (module `staplegun`). Add it to your module and import
-it:
+staplegun is a Go library (module `github.com/epmoyer/staplegun`). Add it to your
+module and import it:
+
+```sh
+go get github.com/epmoyer/staplegun
+```
 
 ```go
-import "staplegun"
+import "github.com/epmoyer/staplegun"
 ```
 
 It also ships a command-line tool for driving the same processing from build
@@ -93,7 +97,7 @@ Run it from Go:
 ```go
 package main
 
-import "staplegun"
+import "github.com/epmoyer/staplegun"
 
 func main() {
     err := staplegun.MakeTemplates(
@@ -327,11 +331,11 @@ files from an embedded filesystem and therefore needs them to exist at build tim
 The command lives in `cmd/staplegun`. Install it with the Go toolchain:
 
 ```sh
-# from a checkout of this repo
-go install ./cmd/staplegun
+# straight from source control (pins a version)
+go install github.com/epmoyer/staplegun/cmd/staplegun@latest
 
-# or straight from source control (pins a version)
-go install staplegun/cmd/staplegun@latest
+# or from a checkout of this repo
+go install ./cmd/staplegun
 ```
 
 That drops a `staplegun` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`).
