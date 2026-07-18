@@ -11,7 +11,9 @@ to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 ## v1.1.0 2026-07-18
 ### Added
-- Command line version
+- Command line tool (`cmd/staplegun`) for running template processing from build
+  scripts. Supports `-var name=value` (repeatable), `-verbose`, and `-version`,
+  and creates the destination directory if it does not exist.
 
 ## v1.0.0 2024-06-30
 ### Added

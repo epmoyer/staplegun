@@ -51,8 +51,8 @@ it:
 import "staplegun"
 ```
 
-There is no standalone binary in this repository — you drive it from Go code by
-calling `MakeTemplates` (see [Go API](#go-api)).
+It also ships a command-line tool for driving the same processing from build
+scripts and CI (see [Command-line tool](#command-line-tool)).
 
 ---
 
@@ -315,6 +315,85 @@ be aware they will appear as literal text in the output.
   indirectly, will recurse until it crashes). Don't create import cycles.
 - **Names** for blocks and variables are `\w+`; import filenames are any run of
   non-whitespace characters.
+
+---
+
+## Command-line tool
+
+The same processing is available as a command so a build script can generate the
+finished templates *before* compiling — useful when an app serves the processed
+files from an embedded filesystem and therefore needs them to exist at build time.
+
+The command lives in `cmd/staplegun`. Install it with the Go toolchain:
+
+```sh
+# from a checkout of this repo
+go install ./cmd/staplegun
+
+# or straight from source control (pins a version)
+go install staplegun/cmd/staplegun@latest
+```
+
+That drops a `staplegun` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`).
+
+### Usage
+
+```
+staplegun [flags] <sourceDir> <destDir>
+
+Flags:
+  -var name=value   define a template variable (may be repeated)
+  -verbose          print a trace of the processing steps
+  -version          print version information and exit
+```
+
+- `<sourceDir>` / `<destDir>` are the same two directories `MakeTemplates` takes.
+- **The destination directory is created for you** (`mkdir -p` semantics) if it
+  doesn't exist. This is deliberate: the processed output directory is typically
+  generated and git-ignored, so it won't be present on a fresh checkout.
+- Pass a `-var` flag once per variable. Values may contain `=` (only the first
+  `=` separates name from value) and spaces (quote them in your shell).
+- Exit status is `0` on success, `2` for bad usage (wrong argument count, malformed
+  `-var`), and `1` for a processing error (bad directory, malformed block,
+  undefined block in a parent, etc.).
+
+### Example
+
+The runtime call from an app's startup…
+
+```go
+staplegun.MakeTemplates(
+    "../data/templates/raw",
+    "../data/templates/processed",
+    false,
+    staplegun.VarMap{"cacheBustingVersion": config.Version},
+)
+```
+
+…is replicated at build time as:
+
+```sh
+staplegun -var cacheBustingVersion="$VERSION" \
+    ../data/templates/raw ../data/templates/processed
+```
+
+A typical Go build that embeds the processed output would run staplegun first, for
+example in a `Makefile`:
+
+```make
+VERSION := $(shell git describe --tags --always)
+
+generate:
+	go run ./cmd/staplegun -var cacheBustingVersion=$(VERSION) \
+		./data/templates/raw ./data/templates/processed
+
+build: generate
+	go build ./...
+```
+
+Using `go run ./cmd/staplegun` (as above) needs no install step and always
+matches the pinned module version, which is convenient in CI. Use `go install`
+when you want a reusable `staplegun` binary on your `PATH`.
 
 ---
 

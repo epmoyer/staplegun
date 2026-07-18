@@ -13,7 +13,7 @@ import (
 )
 
 const gTitle = "staplegun"
-const gVersion = "1.0.0"
+const gVersion = "1.1.0"
 
 var gVerbose = false
 var gDirSource = ""
