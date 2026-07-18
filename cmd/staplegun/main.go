@@ -25,8 +25,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/epmoyer/staplegun"
@@ -61,51 +61,67 @@ func (v *varFlag) Set(s string) error {
 }
 
 func main() {
-	vars := &varFlag{vars: staplegun.VarMap{}}
-	verbose := flag.Bool("verbose", false, "print a trace of the processing steps")
-	showVersion := flag.Bool("version", false, "print version information and exit")
-	flag.Var(vars, "var", "define a template variable as name=value (may be repeated)")
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
 
-	flag.Usage = usage
-	flag.Parse()
+// run parses args and performs the template processing, writing informational
+// output to stdout and errors to stderr. It returns the process exit code:
+// 0 on success, 2 for usage errors, and 1 for processing errors.
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("staplegun", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	vars := &varFlag{vars: staplegun.VarMap{}}
+	verbose := fs.Bool("verbose", false, "print a trace of the processing steps")
+	showVersion := fs.Bool("version", false, "print version information and exit")
+	fs.Var(vars, "var", "define a template variable as name=value (may be repeated)")
+	fs.Usage = func() { usage(fs, stderr) }
+
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		// flag has already reported the error and printed usage.
+		return 2
+	}
 
 	if *showVersion {
-		fmt.Println(staplegun.VersionInfo())
-		return
+		fmt.Fprintln(stdout, staplegun.VersionInfo())
+		return 0
 	}
 
-	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "error: expected exactly two arguments: <sourceDir> <destDir>")
-		flag.Usage()
-		os.Exit(2)
+	if fs.NArg() != 2 {
+		fmt.Fprintln(stderr, "error: expected exactly two arguments: <sourceDir> <destDir>")
+		fs.Usage()
+		return 2
 	}
 
-	sourceDir := flag.Arg(0)
-	destDir := flag.Arg(1)
+	sourceDir := fs.Arg(0)
+	destDir := fs.Arg(1)
 
 	// The destination directory is frequently a generated, git-ignored
 	// directory that does not exist on a fresh checkout. Create it so the
 	// build does not have to remember to.
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "staplegun ERROR: could not create destination %q: %s\n", destDir, err.Error())
-		os.Exit(1)
+		fmt.Fprintf(stderr, "staplegun ERROR: could not create destination %q: %s\n", destDir, err.Error())
+		return 1
 	}
 
-	fmt.Printf("Using: %s\n", staplegun.VersionInfo())
+	fmt.Fprintf(stdout, "Using: %s\n", staplegun.VersionInfo())
 
 	if err := staplegun.MakeTemplates(sourceDir, destDir, *verbose, vars.vars); err != nil {
-		fmt.Fprintf(os.Stderr, "staplegun ERROR: %s\n", err.Error())
-		os.Exit(1)
+		fmt.Fprintf(stderr, "staplegun ERROR: %s\n", err.Error())
+		return 1
 	}
+	return 0
 }
 
-func usage() {
-	out := flag.CommandLine.Output()
-	prog := filepath.Base(os.Args[0])
+func usage(fs *flag.FlagSet, out io.Writer) {
+	prog := fs.Name()
 	fmt.Fprintf(out, "%s - compose text templates by importing files and inserting blocks\n\n", staplegun.VersionInfo())
 	fmt.Fprintf(out, "Usage:\n  %s [flags] <sourceDir> <destDir>\n\n", prog)
 	fmt.Fprintf(out, "Flags:\n")
-	flag.PrintDefaults()
+	fs.PrintDefaults()
 	fmt.Fprintf(out, "\nExamples:\n")
 	fmt.Fprintf(out, "  %s ./raw ./processed\n", prog)
 	fmt.Fprintf(out, "  %s -verbose -var cacheBustingVersion=1.4.2 ./raw ./processed\n", prog)
